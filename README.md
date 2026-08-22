@@ -54,7 +54,7 @@ Edit `secrets.h` before compiling:
 ```cpp
 #define WIFI_SSID     "YOUR_WIFI_NAME"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
-#define G8_API_BASE   "http://192.168.1.27:5000"
+#define G8_API_BASE   "http://YOUR_PI_IP:5000"
 ```
 
 Change `G8_API_BASE` to the Raspberry Pi address used on your network.
