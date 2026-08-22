@@ -33,6 +33,10 @@ static lv_obj_t *power_status_label = nullptr;
 static lv_obj_t *power_dot = nullptr;
 static lv_obj_t *message_label = nullptr;
 
+// Cache the visible state so unchanged backend responses don't trigger
+// another full-screen LVGL refresh.
+static String last_ui_signature = "";
+
 enum PendingAction {
     ACTION_NONE, ACTION_PC, ACTION_MAC, ACTION_PS5, ACTION_SWITCH, ACTION_POWER
 };
@@ -96,7 +100,7 @@ static void scanTargetSSID()
 static uint32_t last_status_poll = 0;
 static uint32_t last_wifi_attempt = 0;
 static uint32_t last_wifi_debug = 0;
-static const uint32_t STATUS_POLL_MS = 3000;
+static const uint32_t STATUS_POLL_MS = 5000;
 static const uint32_t WIFI_RETRY_MS = 15000;
 
 static String jsonStringValue(const String &json, const char *key)
@@ -366,10 +370,21 @@ static void refreshStatus()
 {
     String body;
     if (!httpGet("/api/status", body)) {
+        wl_status_t st = WiFi.status();
+
+        String signature = "offline|";
+        signature += String((int)st);
+        if (st == WL_CONNECTED) {
+            signature += '|';
+            signature += WiFi.localIP().toString();
+        }
+
+        // If the visible offline state hasn't changed, don't invalidate LVGL.
+        if (signature == last_ui_signature) return;
+
         if (lvgl_port_lock(60)) {
             setOnline(false);
 
-            wl_status_t st = WiFi.status();
             if (st == WL_CONNECTED) {
                 static char msg[96];
                 snprintf(msg, sizeof(msg), "Wi-Fi OK  %s  |  API OFFLINE",
@@ -385,6 +400,7 @@ static void refreshStatus()
                 setMessage(msg);
             }
 
+            last_ui_signature = signature;
             lvgl_port_unlock();
         }
         return;
@@ -397,6 +413,22 @@ static void refreshStatus()
     bool emac = sourceEnabledFromJson(body, "mac", true);
     bool eps5 = sourceEnabledFromJson(body, "ps5", true);
     bool esw = sourceEnabledFromJson(body, "switch", true);
+
+    String signature = "online|";
+    signature += source;
+    signature += '|';
+    signature += power;
+    signature += '|';
+    signature += (epc ? '1' : '0');
+    signature += (emac ? '1' : '0');
+    signature += (eps5 ? '1' : '0');
+    signature += (esw ? '1' : '0');
+    signature += '|';
+    signature += WiFi.localIP().toString();
+
+    // The backend can still be polled regularly, but LVGL only redraws when
+    // something that is actually visible on screen has changed.
+    if (signature == last_ui_signature) return;
 
     if (lvgl_port_lock(80)) {
         setOnline(true);
@@ -412,6 +444,7 @@ static void refreshStatus()
                  WiFi.localIP().toString().c_str());
         setMessage(okmsg);
 
+        last_ui_signature = signature;
         lvgl_port_unlock();
     }
 }
@@ -436,6 +469,9 @@ static void performAction()
     bool ok = httpPost(path, body);
     if (lvgl_port_lock(60)) {
         if (!ok) {
+            // Force the next successful poll to restore the online state even
+            // if the backend data itself hasn't changed.
+            last_ui_signature = "";
             setOnline(false);
             setMessage("Command failed");
         } else {
@@ -485,7 +521,7 @@ void setup()
 #if ESP_PANEL_DRIVERS_BUS_ENABLE_RGB && CONFIG_IDF_TARGET_ESP32S3
     auto lcd_bus = lcd->getBus();
     if (lcd_bus->getBasicAttributes().type == ESP_PANEL_BUS_TYPE_RGB) {
-        static_cast<BusRGB *>(lcd_bus)->configRGB_BounceBufferSize(lcd->getFrameWidth() * 10);
+        static_cast<BusRGB *>(lcd_bus)->configRGB_BounceBufferSize(lcd->getFrameWidth() * 20);
     }
 #endif
 #endif
